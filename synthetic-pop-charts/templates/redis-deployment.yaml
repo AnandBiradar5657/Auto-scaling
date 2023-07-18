@@ -1,0 +1,119 @@
+---
+# IBM Confidential
+# PID 5737-N85, 5900-AG5
+# Copyright IBM Corp. 2022
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synthetic-pop-redis
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "synthetic-pop.commonLabels" . | nindent 4 }}
+    app: redis
+    app.kubernetes.io/name: redis
+    component: synthetic-pop-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        {{- include "synthetic-pop.commonLabels" . | nindent 8 }}
+        app: redis
+        app.kubernetes.io/name: redis
+        component: synthetic-pop-redis
+    spec:
+      serviceAccountName: {{ template "synthetic-pop.redisServiceAccountName" . }}
+      imagePullSecrets:
+      {{- if .Values.downloadKey }}
+      - name: "instana-io"
+      {{- else if .Values.downloadSecret }}
+      - name: {{ .Values.downloadSecret }}
+      {{- end }}
+      {{- include "synthetic-pop.seccomp" . | nindent 6 }}
+      containers:
+      - name: redis
+        image: {{ .Values.imagePath }}/{{ .Values.redis.image.name }}:{{ .Values.redis.image.tag }}
+        imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+        securityContext:
+          privileged: false
+          # This is needed to be false if you need to test this in a Macbook
+          readOnlyRootFilesystem: {{ .Values.roRootFileSystem }}
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          capabilities:
+              drop:
+                - ALL
+        volumeMounts:
+          {{- if .Values.redis.tls.enabled }}
+          - name: tls
+            mountPath: {{ include "tls.certPath" . | quote }}
+            readOnly: true
+          {{- else }}
+          - name: redis
+            mountPath: {{ include "redis.passPath" . | quote }}
+            readOnly: true
+          {{- end }}
+        env:
+        - name: TLS_ENABLED
+          value: {{ .Values.redis.tls.enabled | default false | quote }}
+        {{- if .Values.redis.tls.enabled }}
+        - name: CERTIFICATE_PATH
+          value: {{ include "tls.certPath" . | quote }}
+        {{- else }}
+        - name: REDIS_PASSWORD_PATH
+          value: {{ include "redis.passPath" . | quote }}
+        {{- end }}
+        - name: REDIS_PASSWORD
+          value: ""
+        ports:
+        - containerPort: 6379
+        resources:
+          limits:
+            cpu: {{ .Values.redis.resources.limits.cpu }}
+            memory: {{ .Values.redis.resources.limits.memory }}
+          requests:
+            cpu: {{ .Values.redis.resources.requests.cpu }}
+            memory: {{ .Values.redis.resources.requests.memory }}
+        livenessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - /etc/redis/run.sh
+            - health
+          initialDelaySeconds: 60
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - /etc/redis/run.sh
+            - health
+          initialDelaySeconds: 45
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+      volumes:
+      {{- if .Values.redis.tls.enabled }}
+      - name: tls
+        secret:
+          secretName: {{ .Values.redis.tls.secretName | quote }}
+          optional: false
+      {{- else if .Values.redis.password }}
+      - name: redis
+        secret:
+          secretName: {{ template "redis.secretName" . }}
+          optional: false
+      {{- else if .Values.redis.passwordSecret }}
+      - name: redis
+        secret:
+          secretName: {{ .Values.redis.passwordSecret }}
+          optional: false
+      {{- end }}
